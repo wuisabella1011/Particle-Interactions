@@ -790,13 +790,12 @@
                 triggerFirework(goldFw, 8.2, 0, 0, 30, '#ffe080');
             }
 
-            // 🖐 🖐 BOTH fists → show "LOVE" sequentially, NO fireworks
+            // 🖐 🖐 BOTH fists → show "LOVE" sequentially
             const bothFists = (leftGesture === 'fist' && rightGesture === 'fist');
             const wasBothFists = (prevLeftGesture === 'fist' && prevRightGesture === 'fist');
 
             if (bothFists) {
                 if (!wasBothFists) {
-                    // Reset LOVE reveal sequence
                     loveText.active = true;
                     loveText.revealPhase = 0;
                     loveText.targetScale = 1.0;
@@ -804,7 +803,8 @@
                     loveText.targetOpacity = 1.0;
                 }
             } else {
-                if (wasBothFists) {
+                // Keep LOVE visible until reveal completes, then fade
+                if (loveText.revealPhase >= 5) {
                     loveText.targetOpacity = 0;
                     loveText.targetScale = 1.0;
                 }
