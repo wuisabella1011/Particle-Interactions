@@ -185,9 +185,8 @@
             return { points:dust, dataArr, positions:pos, geo };
         }
 
-        // ═══════ 3. SPHERICAL Volumetric Heart ═══════
-        // Points on a sphere, deformed by the heart silhouette at each latitude.
-        // Result: looks like a heart from EVERY viewing angle.
+        // ═══════ 3. 3D HEART — Solid of Revolution ═══════
+        // Revolve 2D heart profile around Y axis → perfect heart from every angle.
         function createSphericalHeart(centerX, texCore, baseRGB) {
             const coreCount  = 6000;
             const haloCount  = 2000;
@@ -198,95 +197,101 @@
             const heartScale = 0.48;
             const [cr, cg, cb] = baseRGB;
 
-            // Precompute heart outline for radial lookup at each latitude
-            const outlinePts = 500;
-            const heartOutlineX = new Float32Array(outlinePts);
-            const heartOutlineY = new Float32Array(outlinePts);
-            for (let i = 0; i < outlinePts; i++) {
-                const t = (i / outlinePts) * Math.PI * 2;
-                heartOutlineX[i] = 16 * Math.pow(Math.sin(t), 3);
-                heartOutlineY[i] = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+            // Heart outline: parametric 2D heart
+            const N = 500;
+            const hx = new Float32Array(N), hy = new Float32Array(N);
+            for (let i = 0; i < N; i++) {
+                const t = (i / N) * Math.PI * 2;
+                hx[i] = 16 * Math.pow(Math.sin(t), 3);
+                hy[i] = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
             }
 
-            // Build max |x| per y-band
+            // Ray-casting point-in-heart test (for 2D)
+            function insideHeart(px, py) {
+                let inside = false;
+                for (let i = 0, j = N - 1; i < N; j = i++) {
+                    if ((hy[i] > py) !== (hy[j] > py)) {
+                        if (px < (hx[j] - hx[i]) * (py - hy[i]) / (hy[j] - hy[i]) + hx[i])
+                            inside = !inside;
+                    }
+                }
+                return inside;
+            }
+
+            // Find heart max-x at a given y → the revolution radius
+            // Sample the outline finely
             const yMin = -18, yMax = 16;
-            const yBands = 256;
-            const maxR = new Float32Array(yBands);
-            const counts = new Float32Array(yBands);
-            for (let i = 0; i < outlinePts; i++) {
-                const y = heartOutlineY[i], xAbs = Math.abs(heartOutlineX[i]);
-                const k = Math.min(yBands - 1, Math.max(0, Math.round((y - yMin) / (yMax - yMin) * (yBands - 1))));
-                if (xAbs > maxR[k]) maxR[k] = xAbs;
-                counts[k] = 1;
-            }
-            // Interpolate gaps
-            for (let k = 0; k < yBands; k++) {
-                if (counts[k] === 0 && k > 0 && k < yBands - 1) {
-                    let lo = k, hi = k;
-                    while (lo > 0 && counts[lo] === 0) lo--;
-                    while (hi < yBands - 1 && counts[hi] === 0) hi++;
-                    const frac = (k - lo) / (hi - lo);
-                    maxR[k] = maxR[lo] + (maxR[hi] - maxR[lo]) * frac;
+            const ySamps = 300;
+            const heartRad = new Float32Array(ySamps);
+            for (let k = 0; k < ySamps; k++) {
+                const yv = yMin + (yMax - yMin) * k / (ySamps - 1);
+                let mx = 0;
+                // Find left and right intersections along horizontal line y=yv
+                for (let i = 0, j = N - 1; i < N; j = i++) {
+                    if ((hy[i] > yv) !== (hy[j] > yv)) {
+                        const xi = hx[i] + (hx[j] - hx[i]) * (yv - hy[i]) / (hy[j] - hy[i]);
+                        if (Math.abs(xi) > mx) mx = Math.abs(xi);
+                    }
                 }
+                heartRad[k] = mx;
             }
-            function heartRadius(yVal) {
-                const k = Math.round((yVal - yMin) / (yMax - yMin) * (yBands - 1));
-                const ck = Math.max(0, Math.min(yBands - 1, k));
-                return maxR[ck] || 0.1;
-            }
-
-            // --- Build sphere particles, deform by heart radius ---
-            function fibonacciSphere(n) {
-                const pts = [];
-                const phi_gold = Math.PI * (3 - Math.sqrt(5));
-                for (let i = 0; i < n; i++) {
-                    const y = 1 - (i / (n - 1)) * 2; // -1..1 in uniform steps
-                    const radiusAtY = Math.sqrt(1 - y * y);
-                    const theta = phi_gold * i;
-                    pts.push({ x: Math.cos(theta) * radiusAtY, y: y, z: Math.sin(theta) * radiusAtY });
-                }
-                return pts;
+            function getHeartRadius(yv) {
+                const t = (yv - yMin) / (yMax - yMin);
+                const k = Math.round(t * (ySamps - 1));
+                return heartRad[Math.max(0, Math.min(ySamps - 1, k))] || 0;
             }
 
-            const spherePts = fibonacciSphere(coreCount);
-            for (let i = 0; i < coreCount; i++) {
-                const sp = spherePts[i];
-                // Heart y-space: map sphere y [-1,1] to heart y [yMin,yMax]
-                const hy = yMin + (sp.y + 1) / 2 * (yMax - yMin);
-                const hr = heartRadius(hy);
-                if (hr < 0.15) continue; // skip the V-notch area
+            // --- Generate core particles: random (x,y) inside heart → revolve to 3D ---
+            const xRange = 16, yRange = yMax - yMin;
+            let placed = 0;
+            while (placed < coreCount) {
+                const rx = (Math.random() - 0.5) * xRange * 2;
+                const ry = yMin + Math.random() * yRange;
+                if (!insideHeart(rx, ry)) continue;
+                const maxZ = getHeartRadius(ry);
+                // Solid of revolution: at radius |rx| from Y axis, max depth = sqrt(maxZ² - rx²)
+                const absX = Math.abs(rx);
+                const zDepth = maxZ > absX ? Math.sqrt(maxZ * maxZ - absX * absX) : 0;
 
-                // Deform x,z by heart radius / max possible radius at this y on sphere
-                const sphereR = Math.sqrt(sp.x * sp.x + sp.z * sp.z) || 0.001;
-                const scaleXY = hr / 16; // 16 is max x of heart outline
-                const bx = sp.x / sphereR * hr * scaleXY * heartScale + centerX;
-                const by = hy * heartScale;
-                const bz = sp.z / sphereR * hr * scaleXY * heartScale * 0.7; // squash z slightly for depth
-                const idx = i;
+                // Random z within the solid of revolution
+                const rz = (Math.random() - 0.5) * 2 * zDepth;
+
+                const bx = rx * heartScale + centerX;
+                const by = ry * heartScale;
+                const bz = rz * heartScale;
+
+                const idx = placed;
                 basePos[idx*3]=bx; basePos[idx*3+1]=by; basePos[idx*3+2]=bz;
                 positions[idx*3]=bx; positions[idx*3+1]=by; positions[idx*3+2]=bz;
                 const bright = 0.5 + Math.random() * 0.5;
                 colors[idx*3]=Math.min(1,(cr/255)*bright+Math.random()*0.04);
                 colors[idx*3+1]=Math.min(1,(cg/255)*bright+Math.random()*0.03);
                 colors[idx*3+2]=Math.min(1,(cb/255)*bright+Math.random()*0.04);
+                placed++;
             }
 
-            // Halo: same but larger radius and dimmer
-            const haloPts = fibonacciSphere(haloCount);
-            for (let i = 0; i < haloCount; i++) {
-                const sp = haloPts[i];
-                const hy = yMin + (sp.y + 1) / 2 * (yMax - yMin);
-                const hr = heartRadius(hy);
-                const sphereR = Math.sqrt(sp.x * sp.x + sp.z * sp.z) || 0.001;
-                const scaleXY = hr / 16;
-                const bx = sp.x / sphereR * hr * scaleXY * heartScale * 0.72 + centerX;
-                const by = hy * heartScale * 0.72;
-                const bz = sp.z / sphereR * hr * scaleXY * heartScale * 0.5;
-                const idx = coreCount + i;
+            // --- Halo: scatter in bounding box, keep OUTSIDE heart but near ---
+            placed = 0;
+            const haloXRange = xRange * 1.5, haloYRange = yRange * 1.4;
+            while (placed < haloCount) {
+                const rx = (Math.random() - 0.5) * haloXRange * 2;
+                const ry = yMin - yRange * 0.2 + Math.random() * haloYRange;
+                if (insideHeart(rx, ry)) continue;
+                const maxZ = getHeartRadius(ry);
+                const absX = Math.abs(rx);
+                const zDepth = maxZ > absX ? Math.sqrt(Math.max(0.1, maxZ*maxZ - absX*absX)) : 0.05;
+                const rz = (Math.random() - 0.5) * 2 * zDepth * 0.8;
+
+                const bx = rx * heartScale * 0.78 + centerX;
+                const by = ry * heartScale * 0.78;
+                const bz = rz * heartScale * 0.78;
+
+                const idx = coreCount + placed;
                 basePos[idx*3]=bx; basePos[idx*3+1]=by; basePos[idx*3+2]=bz;
                 positions[idx*3]=bx; positions[idx*3+1]=by; positions[idx*3+2]=bz;
-                const a = 0.15 + Math.random() * 0.25;
+                const a = 0.12 + Math.random() * 0.25;
                 colors[idx*3]=(cr/255)*a; colors[idx*3+1]=(cg/255)*a; colors[idx*3+2]=(cb/255)*a;
+                placed++;
             }
 
             const geo = new THREE.BufferGeometry();
