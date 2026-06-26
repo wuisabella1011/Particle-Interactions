@@ -343,78 +343,99 @@
             const positions = new Float32Array(maxPts * 3);
             const colors    = new Float32Array(maxPts * 3);
             const basePos   = new Float32Array(maxPts * 3);
-            const textData  = []; // each particle: { homeX, homeY, homeZ, letterIdx, offset }
+            const textData  = [];
 
-            const letters = ['L','O','V','E'];
-            // Letter bounding boxes (xmin, xmax) in world coords — precomputed from rendering together
-            const letterRanges = [
-                { xMin: -6.0, xMax: -3.6 },  // L
-                { xMin: -3.2, xMax: -0.5 },  // O
-                { xMin: -0.1, xMax:  2.6 },  // V
-                { xMin:  3.0, xMax:  6.0 },  // E
-            ];
-
-            // Render each letter separately to know which pixel belongs to which letter
+            // Render "LOVE" as a single word, wider canvas for letter separation
             const cv = document.createElement('canvas');
-            cv.width = 1024; cv.height = 256;
+            cv.width = 1400; cv.height = 400;
             const cx = cv.getContext('2d');
+            cx.fillStyle = '#000'; cx.fillRect(0, 0, cv.width, cv.height);
+            cx.fillStyle = '#fff';
+            // Use letter-spacing via extra spaces between letters
+            cx.font = 'bold 200px "Georgia", "Times New Roman", serif';
+            cx.textAlign = 'center'; cx.textBaseline = 'middle';
+            cx.fillText('L O V E', cv.width / 2, cv.height / 2);
 
-            let allPixels = [];
-            for (let li = 0; li < 4; li++) {
-                cx.fillStyle = '#000'; cx.fillRect(0, 0, cv.width, cv.height);
-                cx.fillStyle = '#fff';
-                cx.font = 'bold 170px "Georgia", "Times New Roman", serif';
-                cx.textAlign = 'center'; cx.textBaseline = 'middle';
-                cx.fillText(letters[li], cv.width / 2, cv.height / 2);
+            const imgData = cx.getImageData(0, 0, cv.width, cv.height);
 
-                const imgData = cx.getImageData(0, 0, cv.width, cv.height);
-                for (let py = 0; py < cv.height; py++) {
-                    for (let px = 0; px < cv.width; px++) {
-                        const ii = (py * cv.width + px) * 4;
-                        if (imgData.data[ii + 3] > 100) {
-                            allPixels.push({
-                                x: (px / cv.width - 0.5) * 12,
-                                y: (0.5 - py / cv.height) * 3.0 + 0.7,
-                                letterIdx: li,
-                            });
-                        }
+            // Find letter boundaries by horizontal projection
+            const bins = 280;
+            const proj = new Float32Array(bins);
+            for (let py = 0; py < cv.height; py++) {
+                for (let px = 0; px < cv.width; px++) {
+                    const idx = (py * cv.width + px) * 4;
+                    if (imgData.data[idx + 3] > 100) {
+                        proj[Math.floor(px / cv.width * bins)]++;
                     }
                 }
             }
 
-            // Shuffle within each letter group, then interleave
-            const groups = [[], [], [], []];
-            for (const p of allPixels) groups[p.letterIdx].push(p);
-
-            let writeIdx = 0;
-            // Take proportional amounts from each letter
-            const counts = groups.map(g => g.length);
-            const totalPixels = counts.reduce((a,b)=>a+b, 0);
-            const targetPerLetter = [1800, 2200, 2000, 2000]; // L,O,V,E
-
-            for (let li = 0; li < 4; li++) {
-                const take = Math.min(targetPerLetter[li], groups[li].length);
-                // Shuffle and pick
-                for (let k = groups[li].length - 1; k > 0; k--) {
-                    const j = Math.floor(Math.random() * (k + 1));
-                    [groups[li][k], groups[li][j]] = [groups[li][j], groups[li][k]];
+            // Find gaps between letters
+            function findGap(startBin, endBin) {
+                let best = startBin;
+                let bestVal = Infinity;
+                for (let b = startBin; b <= endBin; b++) {
+                    if (proj[b] < bestVal) { bestVal = proj[b]; best = b; }
                 }
+                return best;
+            }
+            const mid1 = findGap(Math.floor(0.15*bins), Math.floor(0.35*bins));
+            const mid2 = findGap(Math.floor(0.38*bins), Math.floor(0.62*bins));
+            const mid3 = findGap(Math.floor(0.65*bins), Math.floor(0.85*bins));
+
+            // Sample pixels + assign to letter
+            const groups = [[], [], [], []];
+            const LETTER_COLORS = [
+                [1.0, 0.55, 0.55], // L: warm pink
+                [1.0, 0.35, 0.45], // O: deeper pink
+                [1.0, 0.48, 0.6],  // V: rose
+                [1.0, 0.4, 0.55],  // E: soft pink
+            ];
+
+            for (let py = 2; py < cv.height; py += 2) {
+                for (let px = 2; px < cv.width; px += 2) {
+                    const ii = (py * cv.width + px) * 4;
+                    if (imgData.data[ii + 3] > 100) {
+                        const bin = Math.floor(px / cv.width * bins);
+                        let li;
+                        if (bin < mid1) li = 0;
+                        else if (bin < mid2) li = 1;
+                        else if (bin < mid3) li = 2;
+                        else li = 3;
+
+                        const wx = (px / cv.width - 0.5) * 14;
+                        const wy = (0.5 - py / cv.height) * 3.5 + 0.6;
+                        groups[li].push({ x: wx, y: wy, li });
+                    }
+                }
+            }
+
+            // Sample evenly from each group
+            const TARGETS = [2000, 2200, 2200, 1600]; // L, O, V, E
+            let writeIdx = 0;
+            for (let li = 0; li < 4; li++) {
+                const arr = groups[li];
+                // Fisher-Yates shuffle
+                for (let k = arr.length - 1; k > 0; k--) {
+                    const j = Math.floor(Math.random() * (k + 1));
+                    [arr[k], arr[j]] = [arr[j], arr[k]];
+                }
+                const take = Math.min(TARGETS[li], arr.length);
                 for (let k = 0; k < take && writeIdx < maxPts; k++) {
-                    const p = groups[li][k];
+                    const p = arr[k];
                     const z = (Math.random() - 0.5) * 0.5;
                     basePos[writeIdx*3]=p.x; basePos[writeIdx*3+1]=p.y; basePos[writeIdx*3+2]=z;
                     positions[writeIdx*3]=p.x; positions[writeIdx*3+1]=p.y; positions[writeIdx*3+2]=z;
-                    // Soft pink — high brightness
-                    colors[writeIdx*3]=1.0;
-                    colors[writeIdx*3+1]=0.45 + Math.random()*0.18;
-                    colors[writeIdx*3+2]=0.55 + Math.random()*0.25;
-                    textData.push({ homeX:p.x, homeY:p.y, homeZ:z, letterIdx:p.letterIdx, offset:Math.random()*Math.PI*2 });
+                    const cc = LETTER_COLORS[li];
+                    colors[writeIdx*3]=cc[0];
+                    colors[writeIdx*3+1]=cc[1] + (Math.random()-0.5)*0.12;
+                    colors[writeIdx*3+2]=cc[2] + (Math.random()-0.5)*0.15;
+                    textData.push({ homeX:p.x, homeY:p.y, homeZ:z, letterIdx:p.li, offset:Math.random()*Math.PI*2 });
                     writeIdx++;
                 }
             }
             const totalPts = writeIdx;
 
-            // Pad remaining
             for (let i = totalPts; i < maxPts; i++) {
                 basePos[i*3]=0; basePos[i*3+1]=-999; basePos[i*3+2]=0;
                 positions[i*3]=0; positions[i*3+1]=-999; positions[i*3+2]=0;
@@ -425,7 +446,7 @@
             geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             geo.setDrawRange(0, 0);
-            const texPink = createGlowTexture(255, 125, 160, 0.96, 64);
+            const texPink = createGlowTexture(255, 110, 150, 0.96, 64);
             const mat = new THREE.PointsMaterial({ size: 0.5, map: texPink, vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, sizeAttenuation: true });
             const loveText = new THREE.Points(geo, mat);
             loveText.renderOrder = 6;
@@ -434,8 +455,8 @@
 
             return {
                 loveText, geo, positions, basePos, colors, mat, textData, totalPts, maxPts,
-                active: false, revealPhase: 0,        // 0=hidden, 1-4=revealing letter N, 5=all shown
-                revealTimer: 0,                        // seconds since phase started
+                active: false, revealPhase: 0,
+                revealTimer: 0,
                 targetOpacity: 0, currentOpacity: 0,
                 targetScale: 1.0, currentScale: 1.0,
             };
