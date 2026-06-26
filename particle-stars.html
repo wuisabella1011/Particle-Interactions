@@ -337,7 +337,84 @@
             return { trail, geo, positions:pos, mat, trailData:[], maxTrail };
         }
 
-        // ═══════ 6. Star Bridge ═══════
+        // ═══════ 6. "LOVE" Particle Text ═══════
+        function createLoveText() {
+            const maxPts = 5000;
+            const positions = new Float32Array(maxPts * 3);
+            const colors    = new Float32Array(maxPts * 3);
+            const basePos   = new Float32Array(maxPts * 3);
+            const textData  = [];
+
+            // Render "LOVE" to an offscreen canvas, sample pixels
+            const cv = document.createElement('canvas');
+            cv.width = 512; cv.height = 128;
+            const cx = cv.getContext('2d');
+            cx.fillStyle = '#000000'; cx.fillRect(0, 0, cv.width, cv.height);
+            cx.fillStyle = '#ffffff';
+            cx.font = 'bold 90px "Georgia", "Times New Roman", serif';
+            cx.textAlign = 'center'; cx.textBaseline = 'middle';
+            cx.fillText('LOVE', cv.width / 2, cv.height / 2);
+
+            const imgData = cx.getImageData(0, 0, cv.width, cv.height);
+            const pixels = [];
+            for (let py = 0; py < cv.height; py += 1) {
+                for (let px = 0; px < cv.width; px += 1) {
+                    const idx = (py * cv.width + px) * 4;
+                    if (imgData.data[idx + 3] > 128) {
+                        pixels.push({
+                            x: (px / cv.width - 0.5) * 14,
+                            y: (0.5 - py / cv.height) * 3.5 + 0.6,
+                            alpha: imgData.data[idx + 3] / 255,
+                        });
+                    }
+                }
+            }
+
+            // Downsample to maxPts
+            const step = Math.max(1, Math.floor(pixels.length / maxPts));
+            let writeIdx = 0;
+            for (let i = 0; i < pixels.length && writeIdx < maxPts; i += step) {
+                const p = pixels[i];
+                const z = (Math.random() - 0.5) * 0.8;
+                basePos[writeIdx * 3]     = p.x;
+                basePos[writeIdx * 3 + 1] = p.y;
+                basePos[writeIdx * 3 + 2] = z;
+                positions[writeIdx * 3]     = p.x;
+                positions[writeIdx * 3 + 1] = p.y;
+                positions[writeIdx * 3 + 2] = z;
+                // Gradient: purple → pink → gold across the word
+                const frac = (writeIdx / maxPts);
+                colors[writeIdx * 3]     = 0.7 + frac * 0.3;
+                colors[writeIdx * 3 + 1] = 0.2 + (1 - Math.abs(frac - 0.5) * 2) * 0.4;
+                colors[writeIdx * 3 + 2] = 0.8 - frac * 0.5;
+                textData.push({ homeX: p.x, homeY: p.y, homeZ: z, offset: Math.random() * Math.PI * 2 });
+                writeIdx++;
+            }
+            const totalPts = writeIdx;
+
+            // Pad remaining
+            for (let i = totalPts; i < maxPts; i++) {
+                basePos[i*3]=0; basePos[i*3+1]=-999; basePos[i*3+2]=0;
+                positions[i*3]=0; positions[i*3+1]=-999; positions[i*3+2]=0;
+                colors[i*3]=0; colors[i*3+1]=0; colors[i*3+2]=0;
+            }
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            geo.setDrawRange(0, 0);
+            const texGold = createGlowTexture(255, 200, 80, 0.92, 64);
+            const mat = new THREE.PointsMaterial({ size: 0.22, map: texGold, vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, sizeAttenuation: true });
+            const loveText = new THREE.Points(geo, mat);
+            loveText.renderOrder = 6;
+            loveText.frustumCulled = false;
+            scene.add(loveText);
+
+            return { loveText, geo, positions, basePos, colors, mat, textData, totalPts, maxPts,
+                active: false, targetOpacity: 0, currentOpacity: 0 };
+        }
+
+        // ═══════ 7. Star Bridge ═══════
         function createBridgeSystem(tex, colorHex) {
             const maxP=3000, totalPaths=22;
             const pos=new Float32Array(maxP*3), col=new Float32Array(maxP*3);
@@ -369,6 +446,7 @@
         const rightTrail   = createHandTrail('#ffc880');
         const leftBridge   = createBridgeSystem(texDeepPurple, '#5a0c91');
         const rightBridge  = createBridgeSystem(texDeepBlue, '#06105f');
+        const loveText     = createLoveText();
         leftBridge.heartPos.set(-8.2, 0, 0);
         rightBridge.heartPos.set(8.2, 0, 0);
         console.log('  Scene created ✓');
@@ -505,6 +583,29 @@
             sys.geo.attributes.position.needsUpdate=true;
         }
 
+        function updateLoveText(sys, time, dt) {
+            // Smooth opacity spring
+            sys.currentOpacity += (sys.targetOpacity - sys.currentOpacity) * 4 * dt;
+            sys.mat.opacity = sys.currentOpacity;
+
+            const count = Math.floor(sys.totalPts);
+            sys.geo.setDrawRange(0, sys.active ? count : 0);
+
+            if (!sys.active && sys.currentOpacity < 0.01) return;
+
+            const pa = sys.positions, ba = sys.basePos;
+            for (let i = 0; i < count; i++) {
+                const td = sys.textData[i];
+                const wave = Math.sin(time * 2.5 + td.offset) * 0.18;
+                const pulse = 1 + Math.sin(time * 3 + td.offset * 2) * 0.06;
+                pa[i*3]     = ba[i*3] * pulse;
+                pa[i*3 + 1] = ba[i*3 + 1] * pulse + wave;
+                pa[i*3 + 2] = ba[i*3 + 2] * pulse;
+            }
+            sys.geo.attributes.position.needsUpdate = true;
+            sys.geo.attributes.color.needsUpdate = true;
+        }
+
         // ═══════ Gesture Detection ═══════
         // Returns 'open' | 'fist' | 'neutral'
         function detectGesture(landmarks) {
@@ -621,6 +722,23 @@
                 triggerFirework(goldFw, 8.2, 0, 0, 60, '#ffe080');
             }
 
+            // 🖐 🖐 BOTH fists → show "LOVE" text, sparkle fireworks
+            const bothFists = (leftGesture === 'fist' && rightGesture === 'fist');
+            const wasBothFists = (prevLeftGesture === 'fist' && prevRightGesture === 'fist');
+
+            if (bothFists) {
+                loveText.targetOpacity = 1.0;
+                loveText.active = true;
+                if (!wasBothFists) {
+                    triggerFirework(goldFw, 0, 0, 0, 200, '#ffe080');
+                    triggerFirework(leftFw, 0, 0, 0, 100, '#c870ff');
+                    triggerFirework(rightFw, 0, 0, 0, 100, '#4070ff');
+                }
+            } else {
+                loveText.targetOpacity = 0;
+                if (loveText.currentOpacity < 0.02) loveText.active = false;
+            }
+
             // UI
             if (ts - lastUI > 350) {
                 lastUI = ts;
@@ -648,6 +766,7 @@
             updateFirework(leftFw, time, dt);
             updateFirework(rightFw, time, dt);
             updateFirework(goldFw, time, dt);
+            updateLoveText(loveText, time, dt);
             updateDust(floatingDust, time);
 
             starfield.rotation.y += dt * 0.025;
