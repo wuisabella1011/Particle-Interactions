@@ -620,25 +620,31 @@
             if (sys.revealPhase >= 1 && sys.revealPhase <= 5) {
                 sys.revealTimer += dt;
             }
-            // Time per letter: 0.4s reveal
-            const LETTER_TIME = 0.4;
+            // Time per letter: 0.55s reveal
+            const LETTER_TIME = 0.55;
             if (sys.revealPhase >= 1 && sys.revealPhase <= 4 && sys.revealTimer > LETTER_TIME) {
                 sys.revealPhase++;
                 sys.revealTimer = 0;
             }
+            // When active, target opacity always 1
+            if (sys.active) sys.targetOpacity = 1.0;
+            // Only fade when no longer both-fisting AND reveal is complete
+            if (!sys.active && sys.revealPhase >= 5) {
+                sys.targetOpacity = 0;
+            }
 
             // Phase 5: after all letters shown, start growing
-            const GROW_DELAY = 0.35;
+            const GROW_DELAY = 0.5;
             if (sys.revealPhase === 5 && sys.revealTimer > GROW_DELAY) {
-                sys.targetScale = 1.6; // slowly grow to 1.6x
+                sys.targetScale = 1.6;
             }
 
             // Smooth opacity
-            sys.currentOpacity += (sys.targetOpacity - sys.currentOpacity) * 5 * dt;
+            sys.currentOpacity += (sys.targetOpacity - sys.currentOpacity) * 4 * dt;
             sys.mat.opacity = sys.currentOpacity;
 
             // Smooth scale
-            sys.currentScale += (sys.targetScale - sys.currentScale) * 1.5 * dt;
+            sys.currentScale += (sys.targetScale - sys.currentScale) * 1.2 * dt;
             const s = sys.currentScale;
 
             // Determine how many letters to show
