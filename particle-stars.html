@@ -404,10 +404,10 @@
                     const z = (Math.random() - 0.5) * 0.5;
                     basePos[writeIdx*3]=p.x; basePos[writeIdx*3+1]=p.y; basePos[writeIdx*3+2]=z;
                     positions[writeIdx*3]=p.x; positions[writeIdx*3+1]=p.y; positions[writeIdx*3+2]=z;
-                    // Soft pink
-                    colors[writeIdx*3]=0.98;
-                    colors[writeIdx*3+1]=0.42 + Math.random()*0.15;
-                    colors[writeIdx*3+2]=0.6 + Math.random()*0.2;
+                    // Soft pink — high brightness
+                    colors[writeIdx*3]=1.0;
+                    colors[writeIdx*3+1]=0.45 + Math.random()*0.18;
+                    colors[writeIdx*3+2]=0.55 + Math.random()*0.25;
                     textData.push({ homeX:p.x, homeY:p.y, homeZ:z, letterIdx:p.letterIdx, offset:Math.random()*Math.PI*2 });
                     writeIdx++;
                 }
@@ -425,8 +425,8 @@
             geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             geo.setDrawRange(0, 0);
-            const texPink = createGlowTexture(255, 160, 190, 0.94, 64);
-            const mat = new THREE.PointsMaterial({ size: 0.35, map: texPink, vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, sizeAttenuation: true });
+            const texPink = createGlowTexture(255, 125, 160, 0.96, 64);
+            const mat = new THREE.PointsMaterial({ size: 0.5, map: texPink, vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, sizeAttenuation: true });
             const loveText = new THREE.Points(geo, mat);
             loveText.renderOrder = 6;
             loveText.frustumCulled = false;
@@ -781,12 +781,12 @@
 
             // Firework triggers on gesture transitions
             if (leftGesture === 'open' && prevLeftGesture !== 'open') {
-                triggerFirework(leftFw, -8.2, 0, 0, 120, '#c870ff');
-                triggerFirework(goldFw, -8.2, 0, 0, 60, '#ffe080');
+                triggerFirework(leftFw, -8.2, 0, 0, 60, '#c870ff');
+                triggerFirework(goldFw, -8.2, 0, 0, 30, '#ffe080');
             }
             if (rightGesture === 'open' && prevRightGesture !== 'open') {
-                triggerFirework(rightFw, 8.2, 0, 0, 120, '#4070ff');
-                triggerFirework(goldFw, 8.2, 0, 0, 60, '#ffe080');
+                triggerFirework(rightFw, 8.2, 0, 0, 60, '#4070ff');
+                triggerFirework(goldFw, 8.2, 0, 0, 30, '#ffe080');
             }
 
             // 🖐 🖐 BOTH fists → show "LOVE" sequentially, NO fireworks
