@@ -337,54 +337,84 @@
             return { trail, geo, positions:pos, mat, trailData:[], maxTrail };
         }
 
-        // ═══════ 6. "LOVE" Particle Text ═══════
+        // ═══════ 6. "LOVE" Particle Text — per-letter reveal ═══════
         function createLoveText() {
             const maxPts = 8000;
             const positions = new Float32Array(maxPts * 3);
             const colors    = new Float32Array(maxPts * 3);
             const basePos   = new Float32Array(maxPts * 3);
-            const textData  = [];
+            const textData  = []; // each particle: { homeX, homeY, homeZ, letterIdx, offset }
 
-            // Render "LOVE" to offscreen canvas at HIGH resolution
+            const letters = ['L','O','V','E'];
+            // Letter bounding boxes (xmin, xmax) in world coords — precomputed from rendering together
+            const letterRanges = [
+                { xMin: -6.0, xMax: -3.6 },  // L
+                { xMin: -3.2, xMax: -0.5 },  // O
+                { xMin: -0.1, xMax:  2.6 },  // V
+                { xMin:  3.0, xMax:  6.0 },  // E
+            ];
+
+            // Render each letter separately to know which pixel belongs to which letter
             const cv = document.createElement('canvas');
             cv.width = 1024; cv.height = 256;
             const cx = cv.getContext('2d');
-            cx.fillStyle = '#000'; cx.fillRect(0, 0, cv.width, cv.height);
-            cx.fillStyle = '#fff';
-            cx.font = 'bold 170px "Georgia", "Times New Roman", serif';
-            cx.textAlign = 'center'; cx.textBaseline = 'middle';
-            cx.fillText('LOVE', cv.width / 2, cv.height / 2);
 
-            const imgData = cx.getImageData(0, 0, cv.width, cv.height);
-            const pixels = [];
-            for (let py = 0; py < cv.height; py++) {
-                for (let px = 0; px < cv.width; px++) {
-                    const ii = (py * cv.width + px) * 4;
-                    if (imgData.data[ii + 3] > 100) {
-                        pixels.push({
-                            x: (px / cv.width - 0.5) * 12,
-                            y: (0.5 - py / cv.height) * 3.0 + 0.7,
-                            a: imgData.data[ii + 3] / 255,
-                        });
+            let allPixels = [];
+            for (let li = 0; li < 4; li++) {
+                cx.fillStyle = '#000'; cx.fillRect(0, 0, cv.width, cv.height);
+                cx.fillStyle = '#fff';
+                cx.font = 'bold 170px "Georgia", "Times New Roman", serif';
+                cx.textAlign = 'center'; cx.textBaseline = 'middle';
+                cx.fillText(letters[li], cv.width / 2, cv.height / 2);
+
+                const imgData = cx.getImageData(0, 0, cv.width, cv.height);
+                for (let py = 0; py < cv.height; py++) {
+                    for (let px = 0; px < cv.width; px++) {
+                        const ii = (py * cv.width + px) * 4;
+                        if (imgData.data[ii + 3] > 100) {
+                            allPixels.push({
+                                x: (px / cv.width - 0.5) * 12,
+                                y: (0.5 - py / cv.height) * 3.0 + 0.7,
+                                letterIdx: li,
+                            });
+                        }
                     }
                 }
             }
 
-            // Take all pixels, no downsampling
-            for (let i = 0; i < Math.min(pixels.length, maxPts); i++) {
-                const p = pixels[i];
-                const z = (Math.random() - 0.5) * 0.6;
-                basePos[i*3]=p.x; basePos[i*3+1]=p.y; basePos[i*3+2]=z;
-                positions[i*3]=p.x; positions[i*3+1]=p.y; positions[i*3+2]=z;
-                // Bright pinkish-gold gradient
-                const frac = i / maxPts;
-                colors[i*3] = 0.95;
-                colors[i*3+1] = 0.3 + frac * 0.4;
-                colors[i*3+2] = 0.5 + (1 - frac) * 0.45;
-                textData.push({ homeX: p.x, homeY: p.y, homeZ: z, offset: Math.random() * Math.PI * 2 });
-            }
-            const totalPts = Math.min(pixels.length, maxPts);
+            // Shuffle within each letter group, then interleave
+            const groups = [[], [], [], []];
+            for (const p of allPixels) groups[p.letterIdx].push(p);
 
+            let writeIdx = 0;
+            // Take proportional amounts from each letter
+            const counts = groups.map(g => g.length);
+            const totalPixels = counts.reduce((a,b)=>a+b, 0);
+            const targetPerLetter = [1800, 2200, 2000, 2000]; // L,O,V,E
+
+            for (let li = 0; li < 4; li++) {
+                const take = Math.min(targetPerLetter[li], groups[li].length);
+                // Shuffle and pick
+                for (let k = groups[li].length - 1; k > 0; k--) {
+                    const j = Math.floor(Math.random() * (k + 1));
+                    [groups[li][k], groups[li][j]] = [groups[li][j], groups[li][k]];
+                }
+                for (let k = 0; k < take && writeIdx < maxPts; k++) {
+                    const p = groups[li][k];
+                    const z = (Math.random() - 0.5) * 0.5;
+                    basePos[writeIdx*3]=p.x; basePos[writeIdx*3+1]=p.y; basePos[writeIdx*3+2]=z;
+                    positions[writeIdx*3]=p.x; positions[writeIdx*3+1]=p.y; positions[writeIdx*3+2]=z;
+                    // Soft pink
+                    colors[writeIdx*3]=0.98;
+                    colors[writeIdx*3+1]=0.42 + Math.random()*0.15;
+                    colors[writeIdx*3+2]=0.6 + Math.random()*0.2;
+                    textData.push({ homeX:p.x, homeY:p.y, homeZ:z, letterIdx:p.letterIdx, offset:Math.random()*Math.PI*2 });
+                    writeIdx++;
+                }
+            }
+            const totalPts = writeIdx;
+
+            // Pad remaining
             for (let i = totalPts; i < maxPts; i++) {
                 basePos[i*3]=0; basePos[i*3+1]=-999; basePos[i*3+2]=0;
                 positions[i*3]=0; positions[i*3+1]=-999; positions[i*3+2]=0;
@@ -395,15 +425,20 @@
             geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             geo.setDrawRange(0, 0);
-            const texGold = createGlowTexture(255, 190, 70, 0.95, 64);
-            const mat = new THREE.PointsMaterial({ size: 0.38, map: texGold, vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, sizeAttenuation: true });
+            const texPink = createGlowTexture(255, 160, 190, 0.94, 64);
+            const mat = new THREE.PointsMaterial({ size: 0.35, map: texPink, vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, sizeAttenuation: true });
             const loveText = new THREE.Points(geo, mat);
             loveText.renderOrder = 6;
             loveText.frustumCulled = false;
             scene.add(loveText);
 
-            return { loveText, geo, positions, basePos, colors, mat, textData, totalPts, maxPts,
-                active: false, targetOpacity: 0, currentOpacity: 0 };
+            return {
+                loveText, geo, positions, basePos, colors, mat, textData, totalPts, maxPts,
+                active: false, revealPhase: 0,        // 0=hidden, 1-4=revealing letter N, 5=all shown
+                revealTimer: 0,                        // seconds since phase started
+                targetOpacity: 0, currentOpacity: 0,
+                targetScale: 1.0, currentScale: 1.0,
+            };
         }
 
         // ═══════ 7. Star Bridge ═══════
@@ -576,26 +611,66 @@
         }
 
         function updateLoveText(sys, time, dt) {
-            // Smooth opacity spring
-            sys.currentOpacity += (sys.targetOpacity - sys.currentOpacity) * 4 * dt;
+            // Phase progression
+            // phase 0: hidden → wait → phase 1 (L) → phase 2 (O) → phase 3 (V) → phase 4 (E) → phase 5 (grow)
+            if (sys.revealPhase === 0 && sys.active) {
+                sys.revealPhase = 1;
+                sys.revealTimer = 0;
+                sys.targetOpacity = 1.0;
+            }
+            if (sys.revealPhase >= 1 && sys.revealPhase <= 5) {
+                sys.revealTimer += dt;
+            }
+            // Time per letter: 0.4s reveal
+            const LETTER_TIME = 0.4;
+            if (sys.revealPhase >= 1 && sys.revealPhase <= 4 && sys.revealTimer > LETTER_TIME) {
+                sys.revealPhase++;
+                sys.revealTimer = 0;
+            }
+
+            // Phase 5: after all letters shown, start growing
+            const GROW_DELAY = 0.35;
+            if (sys.revealPhase === 5 && sys.revealTimer > GROW_DELAY) {
+                sys.targetScale = 1.6; // slowly grow to 1.6x
+            }
+
+            // Smooth opacity
+            sys.currentOpacity += (sys.targetOpacity - sys.currentOpacity) * 5 * dt;
             sys.mat.opacity = sys.currentOpacity;
 
+            // Smooth scale
+            sys.currentScale += (sys.targetScale - sys.currentScale) * 1.5 * dt;
+            const s = sys.currentScale;
+
+            // Determine how many letters to show
+            const activeLetters = (sys.revealPhase <= 4) ? sys.revealPhase : 4;
+
+            if (!sys.active && sys.currentOpacity < 0.01) {
+                sys.geo.setDrawRange(0, 0);
+                return;
+            }
+
             const count = Math.floor(sys.totalPts);
-            sys.geo.setDrawRange(0, sys.active ? count : 0);
-
-            if (!sys.active && sys.currentOpacity < 0.01) return;
-
             const pa = sys.positions, ba = sys.basePos;
+            let visibleCount = 0;
+
             for (let i = 0; i < count; i++) {
                 const td = sys.textData[i];
-                const wave = Math.sin(time * 2.5 + td.offset) * 0.18;
-                const pulse = 1 + Math.sin(time * 3 + td.offset * 2) * 0.06;
-                pa[i*3]     = ba[i*3] * pulse;
-                pa[i*3 + 1] = ba[i*3 + 1] * pulse + wave;
-                pa[i*3 + 2] = ba[i*3 + 2] * pulse;
+                const show = td.letterIdx < activeLetters;
+                if (!show && sys.revealPhase <= 4) {
+                    pa[i*3] = 0; pa[i*3+1] = -999; pa[i*3+2] = 0;
+                    continue;
+                }
+
+                visibleCount++;
+                const wave = Math.sin(time * 2.5 + td.offset) * 0.12;
+                const pulse = 1 + Math.sin(time * 3 + td.offset * 2) * 0.04;
+                pa[i*3]     = ba[i*3] * pulse * s;
+                pa[i*3 + 1] = ba[i*3 + 1] * pulse * s + wave;
+                pa[i*3 + 2] = ba[i*3 + 2] * pulse * s;
             }
+            sys.geo.setDrawRange(0, visibleCount);
             sys.geo.attributes.position.needsUpdate = true;
-            sys.geo.attributes.color.needsUpdate = true;
         }
 
         // ═══════ Gesture Detection ═══════
@@ -714,21 +789,29 @@
                 triggerFirework(goldFw, 8.2, 0, 0, 60, '#ffe080');
             }
 
-            // 🖐 🖐 BOTH fists → show "LOVE" text, sparkle fireworks
+            // 🖐 🖐 BOTH fists → show "LOVE" sequentially, NO fireworks
             const bothFists = (leftGesture === 'fist' && rightGesture === 'fist');
             const wasBothFists = (prevLeftGesture === 'fist' && prevRightGesture === 'fist');
 
             if (bothFists) {
-                loveText.targetOpacity = 1.0;
-                loveText.active = true;
                 if (!wasBothFists) {
-                    triggerFirework(goldFw, 0, 0, 0, 80, '#ffe080');
-                    triggerFirework(leftFw, 0, 0, 0, 40, '#c870ff');
-                    triggerFirework(rightFw, 0, 0, 0, 40, '#4070ff');
+                    // Reset LOVE reveal sequence
+                    loveText.active = true;
+                    loveText.revealPhase = 0;
+                    loveText.targetScale = 1.0;
+                    loveText.currentScale = 1.0;
+                    loveText.targetOpacity = 1.0;
                 }
             } else {
-                loveText.targetOpacity = 0;
-                if (loveText.currentOpacity < 0.02) loveText.active = false;
+                if (wasBothFists) {
+                    loveText.targetOpacity = 0;
+                    loveText.targetScale = 1.0;
+                }
+                if (!bothFists && loveText.currentOpacity < 0.02) {
+                    loveText.active = false;
+                    loveText.revealPhase = 0;
+                    loveText.revealTimer = 0;
+                }
             }
 
             // UI
