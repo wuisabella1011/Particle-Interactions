@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Touch the Stars · Particle Cosmos</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            width: 100vw; height: 100vh; overflow: hidden;
+            background: #010006;
+            font-family: "PingFang SC", "Noto Serif SC", Georgia, serif;
+            cursor: crosshair;
+            -webkit-tap-highlight-color: transparent; user-select: none;
+        }
+        #threeCanvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+
+        .title-overlay { position: fixed; top: 36px; left: 50%; transform: translateX(-50%); z-index: 10; pointer-events: none; text-align: center; }
+        .title-main { font-size: 26px; color: rgba(255,255,255,0.7); letter-spacing: 10px; text-shadow: 0 0 60px rgba(180,150,255,0.35), 0 0 120px rgba(130,180,255,0.18); margin-bottom: 6px; }
+        .title-sub { font-size: 11px; color: rgba(255,255,255,0.25); letter-spacing: 5px; }
+
+        .status-bar { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); z-index: 10; display: flex; align-items: center; gap: 12px; padding: 10px 24px; background: rgba(20,18,40,0.5); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); border-radius: 50px; border: 1px solid rgba(255,255,255,0.05); pointer-events: none; }
+        .status-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.15); transition: all 0.5s ease; }
+        .status-dot.active { background: #7bff8f; box-shadow: 0 0 10px rgba(123,255,143,0.6); }
+        .status-text { font-size: 11px; color: rgba(255,255,255,0.3); letter-spacing: 2px; transition: color 0.5s ease; }
+
+        .camera-hint { position: fixed; bottom: 110px; left: 50%; transform: translateX(-50%); z-index: 10; padding: 13px 28px; background: rgba(160,120,255,0.1); border: 1px solid rgba(180,150,255,0.22); border-radius: 50px; color: rgba(255,255,255,0.65); font-size: 13px; letter-spacing: 2px; cursor: pointer; pointer-events: all; transition: all 0.5s ease; font-family: inherit; }
+        .camera-hint:hover { background: rgba(160,120,255,0.2); border-color: rgba(200,170,255,0.38); box-shadow: 0 0 40px rgba(150,110,255,0.18); color: #fff; }
+        .camera-hint.hidden { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(16px); }
+
+        @media (max-width: 768px) {
+            .title-main { font-size: 18px; letter-spacing: 4px; }
+            .title-sub { font-size: 10px; letter-spacing: 2px; }
+            .status-bar { padding: 8px 16px; gap: 8px; }
+            .camera-hint { font-size: 11px; padding: 10px 20px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="title-overlay">
+        <div class="title-main">T O U C H &nbsp; T H E &nbsp; S T A R S</div>
+        <div class="title-sub">A Cosmos of Particles</div>
+    </div>
+
+    <div class="status-bar" id="statusBar">
+        <span class="status-dot" id="statusDotLeft"></span>
+        <span class="status-dot" id="statusDotRight"></span>
+        <span class="status-text" id="statusText">Awaiting hand sensing...</span>
+    </div>
+
+    <button class="camera-hint" id="cameraHint">✦ Enable Star Bridge</button>
+    <video id="webcamVideo" style="display:none" playsinline></video>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils@0.6.1675466023/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+
+    <script type="importmap">
+        { "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }}
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        console.log('%c💜💙 Touch the Stars %cinitializing...', 'font-size:16px', 'font-size:12px');
+
+        // ═══════ DOM ═══════
+        const statusDotLeft  = document.getElementById('statusDotLeft');
+        const statusDotRight = document.getElementById('statusDotRight');
+        const statusText     = document.getElementById('statusText');
+        const cameraHint     = document.getElementById('cameraHint');
+        const webcamVideo    = document.getElementById('webcamVideo');
+
+        // ═══════ State ═══════
+        let mediaPipeReady = false, cameraActive = false;
+        let leftHandWorld = null, rightHandWorld = null;
+        let leftHandRaw = null, rightHandRaw = null;
+        let leftGesture = 'neutral', rightGesture = 'neutral'; // 'open' | 'fist' | 'neutral'
+        let leftFireworkTrigger = false, rightFireworkTrigger = false;
+        const HAND_SMOOTH = 0.22;
+
+        // ═══════ Three.js Init ═══════
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.3;
+        document.body.appendChild(renderer.domElement);
+        renderer.domElement.id = 'threeCanvas';
+
+        const scene  = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.4, 90);
+        camera.position.set(0, 0.5, 20);
+        camera.lookAt(0, 0, 0);
+
+        const mouseTarget = new THREE.Vector2(0, 0), mouseCurrent = new THREE.Vector2(0, 0);
+        document.addEventListener('mousemove', (e) => {
+            mouseTarget.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouseTarget.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        });
+        document.addEventListener('touchmove', (e) => {
+            const t = e.touches[0];
+            mouseTarget.x = (t.clientX / window.innerWidth) * 2 - 1;
+            mouseTarget.y = -(t.clientY / window.innerHeight) * 2 + 1;
+        }, { passive: true });
+
+        // ═══════ Glow Texture ═══════
+        function createGlowTexture(r, g, b, innerAlpha, size) {
+            const c = document.createElement('canvas'); c.width = size; c.height = size;
+            const ctx = c.getContext('2d'), h = size / 2;
+            const grad = ctx.createRadialGradient(h, h, 0, h, h, h);
+            grad.addColorStop(0,    `rgba(${r},${g},${b},${innerAlpha})`);
+            grad.addColorStop(0.1,  `rgba(${r},${g},${b},${innerAlpha*0.85})`);
+            grad.addColorStop(0.3,  `rgba(${r},${g},${b},${innerAlpha*0.45})`);
+            grad.addColorStop(0.55, `rgba(${r},${g},${b},${innerAlpha*0.1})`);
+            grad.addColorStop(0.8,  `rgba(${r},${g},${b},0.015)`);
+            grad.addColorStop(1,    'rgba(0,0,0,0)');
+            ctx.fillStyle = grad; ctx.fillRect(0, 0, size, size);
+            const tex = new THREE.CanvasTexture(c); tex.needsUpdate = true;
+            return tex;
+        }
+
+        const texPurple    = createGlowTexture(170, 50, 250, 0.94, 128);
+        const texBlue      = createGlowTexture(18, 45, 250, 0.94, 128);
+        const texDeepPurple = createGlowTexture(80, 12, 140, 0.88, 128);
+        const texDeepBlue   = createGlowTexture(6, 14, 90, 0.88, 128);
+        const texWhite      = createGlowTexture(210, 210, 250, 0.82, 128);
+        const texWarmWhite  = createGlowTexture(255, 225, 190, 0.7, 128);
+        const texHandGlow   = createGlowTexture(255, 200, 140, 0.92, 128);
+        const texFirePurple = createGlowTexture(200, 80, 255, 0.95, 64);
+        const texFireBlue   = createGlowTexture(50, 80, 255, 0.95, 64);
+        const texFireGold   = createGlowTexture(255, 210, 80, 0.95, 64);
+
+        // ═══════ 1. Deep Starfield ═══════
+        function createDeepStarfield() {
+            const count = 2500, radius = 42;
+            const pos = new Float32Array(count * 3), col = new Float32Array(count * 3);
+            for (let i = 0; i < count; i++) {
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+                const r = radius * (0.78 + Math.random() * 0.35);
+                pos[i*3] = Math.sin(phi)*Math.cos(theta)*r;
+                pos[i*3+1] = Math.sin(phi)*Math.sin(theta)*r;
+                pos[i*3+2] = Math.cos(phi)*r;
+                const rc = Math.random();
+                if (rc<0.55) { col[i*3]=0.75; col[i*3+1]=0.78; col[i*3+2]=0.95; }
+                else if (rc<0.8) { col[i*3]=0.5; col[i*3+1]=0.55; col[i*3+2]=0.9; }
+                else { col[i*3]=0.6; col[i*3+1]=0.45; col[i*3+2]=0.85; }
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+            const mat = new THREE.PointsMaterial({ size:0.32, map:texWhite, vertexColors:true, blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.7, sizeAttenuation:true });
+            const stars = new THREE.Points(geo, mat); stars.renderOrder = 0; scene.add(stars);
+            return stars;
+        }
+
+        // ═══════ 2. Floating Dust ═══════
+        function createFloatingDust() {
+            const count = 500;
+            const pos = new Float32Array(count*3), col = new Float32Array(count*3);
+            const dataArr = [];
+            for (let i=0;i<count;i++) {
+                pos[i*3]=(Math.random()-0.5)*30; pos[i*3+1]=(Math.random()-0.5)*20; pos[i*3+2]=(Math.random()-0.5)*14;
+                const rn=Math.random();
+                if (rn<0.45){ col[i*3]=0.85;col[i*3+1]=0.7;col[i*3+2]=0.55; }
+                else if (rn<0.78){ col[i*3]=0.55;col[i*3+1]=0.5;col[i*3+2]=0.88; }
+                else{ col[i*3]=0.72;col[i*3+1]=0.48;col[i*3+2]=0.95; }
+                dataArr.push({ bx:pos[i*3],by:pos[i*3+1],bz:pos[i*3+2], sx:(Math.random()-0.5)*0.28,sy:(Math.random()-0.5)*0.22,sz:(Math.random()-0.5)*0.18,ph:Math.random()*Math.PI*2,amp:0.08+Math.random()*0.55 });
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+            const mat = new THREE.PointsMaterial({ size:0.16, map:texWarmWhite, vertexColors:true, blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.5, sizeAttenuation:true });
+            const dust = new THREE.Points(geo, mat); dust.renderOrder = 1; scene.add(dust);
+            return { points:dust, dataArr, positions:pos, geo };
+        }
+
+        // ═══════ 3. SPHERICAL Volumetric Heart ═══════
+        // Points on a sphere, deformed by the heart silhouette at each latitude.
+        // Result: looks like a heart from EVERY viewing angle.
+        function createSphericalHeart(centerX, texCore, baseRGB) {
+            const coreCount  = 6000;
+            const haloCount  = 2000;
+            const totalPts   = coreCount + haloCount;
+            const positions  = new Float32Array(totalPts * 3);
+            const colors     = new Float32Array(totalPts * 3);
+            const basePos    = new Float32Array(totalPts * 3);
+            const heartScale = 0.48;
+            const [cr, cg, cb] = baseRGB;
+
+            // Precompute heart outline for radial lookup at each latitude
+            const outlinePts = 500;
+            const heartOutlineX = new Float32Array(outlinePts);
+            const heartOutlineY = new Float32Array(outlinePts);
+            for (let i = 0; i < outlinePts; i++) {
+                const t = (i / outlinePts) * Math.PI * 2;
+                heartOutlineX[i] = 16 * Math.pow(Math.sin(t), 3);
+                heartOutlineY[i] = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+            }
+
+            // Build max |x| per y-band
+            const yMin = -18, yMax = 16;
+            const yBands = 256;
+            const maxR = new Float32Array(yBands);
+            const counts = new Float32Array(yBands);
+            for (let i = 0; i < outlinePts; i++) {
+                const y = heartOutlineY[i], xAbs = Math.abs(heartOutlineX[i]);
+                const k = Math.min(yBands - 1, Math.max(0, Math.round((y - yMin) / (yMax - yMin) * (yBands - 1))));
+                if (xAbs > maxR[k]) maxR[k] = xAbs;
+                counts[k] = 1;
+            }
+            // Interpolate gaps
+            for (let k = 0; k < yBands; k++) {
+                if (counts[k] === 0 && k > 0 && k < yBands - 1) {
+                    let lo = k, hi = k;
+                    while (lo > 0 && counts[lo] === 0) lo--;
+                    while (hi < yBands - 1 && counts[hi] === 0) hi++;
+                    const frac = (k - lo) / (hi - lo);
+                    maxR[k] = maxR[lo] + (maxR[hi] - maxR[lo]) * frac;
+                }
+            }
+            function heartRadius(yVal) {
+                const k = Math.round((yVal - yMin) / (yMax - yMin) * (yBands - 1));
+                const ck = Math.max(0, Math.min(yBands - 1, k));
+                return maxR[ck] || 0.1;
+            }
+
+            // --- Build sphere particles, deform by heart radius ---
+            function fibonacciSphere(n) {
+                const pts = [];
+                const phi_gold = Math.PI * (3 - Math.sqrt(5));
+                for (let i = 0; i < n; i++) {
+                    const y = 1 - (i / (n - 1)) * 2; // -1..1 in uniform steps
+                    const radiusAtY = Math.sqrt(1 - y * y);
+                    const theta = phi_gold * i;
+                    pts.push({ x: Math.cos(theta) * radiusAtY, y: y, z: Math.sin(theta) * radiusAtY });
+                }
+                return pts;
+            }
+
+            const spherePts = fibonacciSphere(coreCount);
+            for (let i = 0; i < coreCount; i++) {
+                const sp = spherePts[i];
+                // Heart y-space: map sphere y [-1,1] to heart y [yMin,yMax]
+                const hy = yMin + (sp.y + 1) / 2 * (yMax - yMin);
+                const hr = heartRadius(hy);
+                if (hr < 0.15) continue; // skip the V-notch area
+
+                // Deform x,z by heart radius / max possible radius at this y on sphere
+                const sphereR = Math.sqrt(sp.x * sp.x + sp.z * sp.z) || 0.001;
+                const scaleXY = hr / 16; // 16 is max x of heart outline
+                const bx = sp.x / sphereR * hr * scaleXY * heartScale + centerX;
+                const by = hy * heartScale;
+                const bz = sp.z / sphereR * hr * scaleXY * heartScale * 0.7; // squash z slightly for depth
+                const idx = i;
+                basePos[idx*3]=bx; basePos[idx*3+1]=by; basePos[idx*3+2]=bz;
+                positions[idx*3]=bx; positions[idx*3+1]=by; positions[idx*3+2]=bz;
+                const bright = 0.5 + Math.random() * 0.5;
+                colors[idx*3]=Math.min(1,(cr/255)*bright+Math.random()*0.04);
+                colors[idx*3+1]=Math.min(1,(cg/255)*bright+Math.random()*0.03);
+                colors[idx*3+2]=Math.min(1,(cb/255)*bright+Math.random()*0.04);
+            }
+
+            // Halo: same but larger radius and dimmer
+            const haloPts = fibonacciSphere(haloCount);
+            for (let i = 0; i < haloCount; i++) {
+                const sp = haloPts[i];
+                const hy = yMin + (sp.y + 1) / 2 * (yMax - yMin);
+                const hr = heartRadius(hy);
+                const sphereR = Math.sqrt(sp.x * sp.x + sp.z * sp.z) || 0.001;
+                const scaleXY = hr / 16;
+                const bx = sp.x / sphereR * hr * scaleXY * heartScale * 0.72 + centerX;
+                const by = hy * heartScale * 0.72;
+                const bz = sp.z / sphereR * hr * scaleXY * heartScale * 0.5;
+                const idx = coreCount + i;
+                basePos[idx*3]=bx; basePos[idx*3+1]=by; basePos[idx*3+2]=bz;
+                positions[idx*3]=bx; positions[idx*3+1]=by; positions[idx*3+2]=bz;
+                const a = 0.15 + Math.random() * 0.25;
+                colors[idx*3]=(cr/255)*a; colors[idx*3+1]=(cg/255)*a; colors[idx*3+2]=(cb/255)*a;
+            }
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            const mat = new THREE.PointsMaterial({ size:0.22, map:texCore, vertexColors:true, blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.92, sizeAttenuation:true });
+            const heart = new THREE.Points(geo, mat); heart.renderOrder = 2; scene.add(heart);
+
+            return { points:heart, geo, positions, basePos, colors, centerX, count:totalPts, coreCount, haloCount,
+                targetScale: 1.0, currentScale: 1.0, scaleVelocity: 0 };
+        }
+
+        // ═══════ 4. Firework System ═══════
+        function createFireworkSystem(tex, colorHex) {
+            const maxFw = 300;
+            const pos = new Float32Array(maxFw * 3);
+            const col = new Float32Array(maxFw * 3);
+            const c = new THREE.Color(colorHex);
+            const fwData = [];
+            for (let i = 0; i < maxFw; i++) {
+                pos[i*3]=0; pos[i*3+1]=-999; pos[i*3+2]=0;
+                col[i*3]=c.r; col[i*3+1]=c.g; col[i*3+2]=c.b;
+                fwData.push({ age:999, life:0, vx:0, vy:0, vz:0, sx:0, sy:0, sz:0 });
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+            geo.setDrawRange(0, 0);
+            const mat = new THREE.PointsMaterial({ size:0.18, map:tex, vertexColors:true, blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.9, sizeAttenuation:true });
+            const fw = new THREE.Points(geo, mat); fw.renderOrder = 4; fw.frustumCulled = false; scene.add(fw);
+            return { fw, geo, positions:pos, colors:col, mat, fwData, maxFw, nextIdx:0 };
+        }
+
+        // ═══════ 5. Hand Trail ═══════
+        function createHandTrail(glowHex) {
+            const maxTrail = 100;
+            const pos = new Float32Array(maxTrail * 3);
+            for (let i=0;i<maxTrail;i++){ pos[i*3]=0; pos[i*3+1]=-999; pos[i*3+2]=0; }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            const mat = new THREE.PointsMaterial({ size:0.2, map:texHandGlow, blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.85, color:new THREE.Color(glowHex), sizeAttenuation:true });
+            const trail = new THREE.Points(geo, mat); trail.renderOrder = 5; trail.frustumCulled = false; scene.add(trail);
+            return { trail, geo, positions:pos, mat, trailData:[], maxTrail };
+        }
+
+        // ═══════ 6. Star Bridge ═══════
+        function createBridgeSystem(tex, colorHex) {
+            const maxP=3000, totalPaths=22;
+            const pos=new Float32Array(maxP*3), col=new Float32Array(maxP*3);
+            const c=new THREE.Color(colorHex), particles=[];
+            for (let i=0;i<maxP;i++) {
+                particles.push({ pathIdx:i%totalPaths, t:Math.random(), flowSpeed:0.05+Math.random()*0.18, offX:(Math.random()-0.5)*0.7, offY:(Math.random()-0.5)*0.7, offZ:(Math.random()-0.5)*0.7, phase:Math.random()*Math.PI*2, twinkle:0.4+Math.random()*3 });
+                pos[i*3]=0; pos[i*3+1]=-999; pos[i*3+2]=0;
+                col[i*3]=c.r; col[i*3+1]=c.g; col[i*3+2]=c.b;
+            }
+            const geo=new THREE.BufferGeometry();
+            geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+            geo.setAttribute('color',new THREE.BufferAttribute(col,3));
+            geo.setDrawRange(0,0);
+            const mat=new THREE.PointsMaterial({ size:0.16, map:tex, vertexColors:true, blending:THREE.AdditiveBlending, depthWrite:false, transparent:true, opacity:0.85, sizeAttenuation:true });
+            const bridge=new THREE.Points(geo,mat); bridge.renderOrder=3; bridge.frustumCulled=false; scene.add(bridge);
+            return { bridge,geo,positions:pos,colors:col,mat,particles,maxParticles:maxP,totalPaths,active:false,handPos:new THREE.Vector3(),heartPos:new THREE.Vector3() };
+        }
+
+        // ═══════ Create All Scene Elements ═══════
+        console.log('  Creating scene...');
+        const starfield    = createDeepStarfield();
+        const floatingDust = createFloatingDust();
+        const leftHeart    = createSphericalHeart(-8.2, texPurple, [170, 50, 250]);
+        const rightHeart   = createSphericalHeart(8.2, texBlue, [18, 45, 250]);
+        const leftFw       = createFireworkSystem(texFirePurple, '#b44dff');
+        const rightFw      = createFireworkSystem(texFireBlue, '#1a3aff');
+        const goldFw       = createFireworkSystem(texFireGold, '#ffe080');
+        const leftTrail    = createHandTrail('#ffb870');
+        const rightTrail   = createHandTrail('#ffc880');
+        const leftBridge   = createBridgeSystem(texDeepPurple, '#5a0c91');
+        const rightBridge  = createBridgeSystem(texDeepBlue, '#06105f');
+        leftBridge.heartPos.set(-8.2, 0, 0);
+        rightBridge.heartPos.set(8.2, 0, 0);
+        console.log('  Scene created ✓');
+
+        // ═══════ Post-Processing ═══════
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.35, 0.12);
+        composer.addPass(bloomPass);
+
+        // ═══════ Bezier ═══════
+        function quadBezier(p0,p1,p2,t){ const u=1-t; return { x:u*u*p0.x+2*u*t*p1.x+t*t*p2.x, y:u*u*p0.y+2*u*t*p1.y+t*t*p2.y, z:u*u*p0.z+2*u*t*p1.z+t*t*p2.z }; }
+        function pathMid(hp,hrt,idx,total){ const mx=(hp.x+hrt.x)/2,my=(hp.y+hrt.y)/2,mz=(hp.z+hrt.z)/2; return { x:mx+(idx/total-0.5)*3.2, y:my+2.2+(idx%4)*1.2, z:mz+(idx%6-2.5)*1.1 }; }
+
+        // ═══════ Update Functions ═══════
+        function updateBridge(sys, handPos, time, dt) {
+            if (!handPos) {
+                if (sys.active) { sys.mat.opacity += (0-sys.mat.opacity)*3.5*dt; if (sys.mat.opacity<0.015){ sys.active=false; sys.mat.opacity=0; sys.geo.setDrawRange(0,0); } }
+                return;
+            }
+            sys.active=true; sys.mat.opacity += (0.85-sys.mat.opacity)*5*dt;
+            sys.handPos.lerp(new THREE.Vector3(handPos.x,handPos.y,handPos.z), 1-Math.exp(-7*dt));
+            const hp=sys.handPos, hrt=sys.heartPos; let wi=0;
+            for (let i=0;i<sys.maxParticles;i++) {
+                const p=sys.particles[i]; p.t+=p.flowSpeed*dt; if(p.t>1.0)p.t-=1.0;
+                const mid=pathMid(hp,hrt,p.pathIdx,sys.totalPaths), pt=quadBezier(hp,mid,hrt,p.t);
+                const tw=0.5+0.5*Math.sin(time*p.twinkle*7+p.phase), br=0.5+tw*0.5;
+                sys.positions[wi]=pt.x+p.offX; sys.positions[wi+1]=pt.y+p.offY; sys.positions[wi+2]=pt.z+p.offZ;
+                sys.colors[wi]=Math.min(1,sys.colors[wi]*0.88+br*0.12);
+                sys.colors[wi+1]=Math.min(1,sys.colors[wi+1]*0.88+br*0.12);
+                sys.colors[wi+2]=Math.min(1,sys.colors[wi+2]*0.88+br*0.12);
+                wi+=3;
+            }
+            sys.geo.setDrawRange(0,sys.maxParticles);
+            sys.geo.attributes.position.needsUpdate=true; sys.geo.attributes.color.needsUpdate=true;
+        }
+
+        function updateHeart(heart, handPos, time, dt) {
+            const pa=heart.positions, ba=heart.basePos;
+            const angle=time*0.18, cosA=Math.cos(angle), sinA=Math.sin(angle);
+
+            // Spring scale animation toward targetScale
+            const k=6, damp=3.5;
+            const force = (heart.targetScale - heart.currentScale) * k - heart.scaleVelocity * damp;
+            heart.scaleVelocity += force * dt;
+            heart.currentScale += heart.scaleVelocity * dt;
+            const s = heart.currentScale;
+
+            const breathe = 1 + Math.sin(time*0.55)*0.03;
+            for (let i=0;i<heart.count;i++) {
+                let bx=ba[i*3], by=ba[i*3+1], bz=ba[i*3+2];
+                const cx=heart.centerX;
+                // Rotate around center
+                const dx=bx-cx;
+                const rx=dx*cosA+bz*sinA, rz=-dx*sinA+bz*cosA;
+                // Scale from center
+                bx=cx+rx*breathe*s; by=by*breathe*s; bz=rz*breathe*s;
+                // Magnetic perturbation
+                if (handPos) {
+                    const pdx=bx-handPos.x, pdy=by-handPos.y, pdz=bz-handPos.z;
+                    const dist=Math.sqrt(pdx*pdx+pdy*pdy+pdz*pdz);
+                    if (dist<8.0){
+                        const str=(1-dist/8.0)*1.5, nd=dist+0.001;
+                        bx+=(pdx/nd)*str; by+=(pdy/nd)*str; bz+=(pdz/nd)*str;
+                    }
+                }
+                pa[i*3]=bx; pa[i*3+1]=by; pa[i*3+2]=bz;
+            }
+            heart.geo.attributes.position.needsUpdate=true;
+        }
+
+        function updateFirework(sys, time, dt) {
+            const pos=sys.positions, col=sys.colors, d=sys.fwData;
+            let alive=0;
+            for (let i=0;i<sys.maxFw;i++) {
+                const fd=d[i];
+                if (fd.age >= fd.life) { pos[i*3]=0; pos[i*3+1]=-999; pos[i*3+2]=0; continue; }
+                fd.age+=dt;
+                const prog=fd.age/fd.life;
+                fd.sx+=fd.vx*dt; fd.sy+=fd.vy*dt; fd.sz+=fd.vz*dt;
+                fd.vy-=1.5*dt; // gravity
+                pos[i*3]=fd.sx; pos[i*3+1]=fd.sy; pos[i*3+2]=fd.sz;
+                const fade=1-prog;
+                col[i*3]*=0.98; col[i*3+1]*=0.98; col[i*3+2]*=0.98;
+                alive++;
+            }
+            sys.geo.setDrawRange(0, Math.min(sys.maxFw, alive));
+            sys.geo.attributes.position.needsUpdate=true;
+            sys.geo.attributes.color.needsUpdate=true;
+        }
+
+        function triggerFirework(sys, cx, cy, cz, count, colorTint) {
+            const d=sys.fwData, pos=sys.positions, col=sys.colors;
+            const bodyC=new THREE.Color(colorTint);
+            let spawned=0;
+            for (let i=0;i<sys.maxFw && spawned<count;i++) {
+                if (d[i].age >= d[i].life) {
+                    const theta=Math.random()*Math.PI*2, phi=Math.acos(2*Math.random()-1);
+                    const speed=1.5+Math.random()*4;
+                    d[i].vx=Math.sin(phi)*Math.cos(theta)*speed;
+                    d[i].vy=Math.sin(phi)*Math.sin(theta)*speed+2;
+                    d[i].vz=Math.sin(phi)*Math.sin(theta)*speed*0.7;
+                    d[i].sx=cx; d[i].sy=cy; d[i].sz=cz;
+                    d[i].age=0; d[i].life=1.2+Math.random()*1.8;
+                    pos[i*3]=cx; pos[i*3+1]=cy; pos[i*3+2]=cz;
+                    col[i*3]=bodyC.r; col[i*3+1]=bodyC.g; col[i*3+2]=bodyC.b;
+                    spawned++;
+                }
+            }
+        }
+
+        function updateTrail(sys, handPos, dt) {
+            const d=sys.trailData, p=sys.positions;
+            if (handPos){ d.unshift({age:0,x:handPos.x,y:handPos.y,z:handPos.z}); if(d.length>sys.maxTrail)d.length=sys.maxTrail; sys.mat.opacity=Math.min(0.85,sys.mat.opacity+4*dt); }
+            for(const t of d)t.age+=dt;
+            while(d.length&&d[d.length-1].age>1.8)d.pop();
+            if(!handPos&&!d.length)sys.mat.opacity+=(0-sys.mat.opacity)*3*dt;
+            for(let i=0;i<sys.maxTrail;i++){
+                if(i<d.length){ const t=d[i]; p[i*3]=t.x; p[i*3+1]=t.y; p[i*3+2]=t.z; }
+                else{ p[i*3]=0; p[i*3+1]=-999; p[i*3+2]=0; }
+            }
+            sys.geo.setDrawRange(0,Math.min(sys.maxTrail,d.length));
+            sys.geo.attributes.position.needsUpdate=true;
+        }
+
+        function updateDust(sys, time) {
+            const pa=sys.positions;
+            for (let i=0;i<sys.dataArr.length;i++) {
+                const d=sys.dataArr[i];
+                pa[i*3]=d.bx+Math.sin(time*d.sx*2+d.ph)*d.amp;
+                pa[i*3+1]=d.by+Math.cos(time*d.sy*2+d.ph)*d.amp;
+                pa[i*3+2]=d.bz+Math.sin(time*d.sz*2+d.ph+1)*d.amp*0.7;
+            }
+            sys.geo.attributes.position.needsUpdate=true;
+        }
+
+        // ═══════ Gesture Detection ═══════
+        // Returns 'open' | 'fist' | 'neutral'
+        function detectGesture(landmarks) {
+            if (!landmarks) return 'neutral';
+            const palm = landmarks[9]; // middle finger MCP
+            const tips = [4, 8, 12, 16, 20]; // thumb, index, middle, ring, pinky tips
+            let avgDist = 0;
+            for (const ti of tips) {
+                const dx = landmarks[ti].x - palm.x;
+                const dy = landmarks[ti].y - palm.y;
+                avgDist += Math.sqrt(dx*dx + dy*dy);
+            }
+            avgDist /= tips.length;
+            if (avgDist > 0.28) return 'open';
+            if (avgDist < 0.12) return 'fist';
+            return 'neutral';
+        }
+
+        // ═══════ Hand Mapping ═══════
+        function mapHandToWorld(lm) {
+            const wx = (1 - (lm[0].x + lm[9].x)/2) * 22 - 11;
+            const wy = (1 - (lm[0].y + lm[9].y)/2) * 13 - 2.5;
+            return { x:wx, y:wy, z:5.5 };
+        }
+
+        // ═══════ MediaPipe ═══════
+        let handsInstance = null, lastLandmarks = { left: null, right: null };
+        function initMediaPipe() {
+            if (typeof Hands === 'undefined') { console.warn('MediaPipe Hands not loaded'); return; }
+            handsInstance = new Hands({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${f}` });
+            handsInstance.setOptions({ maxNumHands:2, modelComplexity:1, minDetectionConfidence:0.65, minTrackingConfidence:0.45 });
+            handsInstance.onResults((r) => {
+                leftHandRaw=null; rightHandRaw=null;
+                lastLandmarks.left=null; lastLandmarks.right=null;
+                if (r.multiHandLandmarks && r.multiHandLandmarks.length) {
+                    for (let i=0;i<r.multiHandLandmarks.length;i++) {
+                        const wp=mapHandToWorld(r.multiHandLandmarks[i]);
+                        if (r.multiHandedness[i].label==='Left'){
+                            leftHandRaw=wp; lastLandmarks.left=r.multiHandLandmarks[i];
+                        } else {
+                            rightHandRaw=wp; lastLandmarks.right=r.multiHandLandmarks[i];
+                        }
+                    }
+                }
+            });
+            mediaPipeReady=true;
+            console.log('  MediaPipe Hands ready ✓');
+        }
+
+        async function startCamera() {
+            if (cameraActive) return;
+            if (!mediaPipeReady) { initMediaPipe(); if (!handsInstance) return; }
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video:{width:640,height:480,facingMode:'user'} });
+                webcamVideo.srcObject=stream; await webcamVideo.play();
+                const cu = new Camera(webcamVideo, { onFrame:async()=>{ if(handsInstance) await handsInstance.send({image:webcamVideo}); }, width:640,height:480 });
+                await cu.start();
+                cameraActive=true; cameraHint.classList.add('hidden');
+                statusText.textContent='Star Bridge active — open palm or make a fist!';
+                statusText.style.color='rgba(180,220,255,0.6)';
+                console.log('  Camera active ✓');
+            } catch(err) {
+                console.warn('Camera denied:',err.message);
+                statusText.textContent='Camera unavailable — enjoying the cosmos';
+                statusText.style.color='rgba(255,255,255,0.25)';
+                cameraHint.textContent='⟳ Retry Camera'; cameraHint.classList.remove('hidden');
+            }
+        }
+        cameraHint.addEventListener('click', startCamera);
+
+        // ═══════ Animation Loop ═══════
+        const clock = new THREE.Clock(); let lastUI = 0;
+
+        function animate(ts) {
+            requestAnimationFrame(animate);
+            const dt = Math.min(clock.getDelta(), 0.1);
+            const time = ts * 0.001;
+
+            // Smooth hand positions
+            if (leftHandRaw) {
+                if (!leftHandWorld) leftHandWorld = { ...leftHandRaw };
+                leftHandWorld.x += (leftHandRaw.x - leftHandWorld.x) * HAND_SMOOTH;
+                leftHandWorld.y += (leftHandRaw.y - leftHandWorld.y) * HAND_SMOOTH;
+                leftHandWorld.z += (leftHandRaw.z - leftHandWorld.z) * HAND_SMOOTH;
+            } else leftHandWorld = null;
+            if (rightHandRaw) {
+                if (!rightHandWorld) rightHandWorld = { ...rightHandRaw };
+                rightHandWorld.x += (rightHandRaw.x - rightHandWorld.x) * HAND_SMOOTH;
+                rightHandWorld.y += (rightHandRaw.y - rightHandWorld.y) * HAND_SMOOTH;
+                rightHandWorld.z += (rightHandRaw.z - rightHandWorld.z) * HAND_SMOOTH;
+            } else rightHandWorld = null;
+
+            // Detect gestures
+            const prevLeftGesture = leftGesture, prevRightGesture = rightGesture;
+            leftGesture  = detectGesture(lastLandmarks.left);
+            rightGesture = detectGesture(lastLandmarks.right);
+
+            // Open palm → heart scale up 1.5x + fireworks
+            if (leftGesture === 'open') leftHeart.targetScale = 1.5;
+            else if (leftGesture === 'fist') leftHeart.targetScale = 0.5;
+            else leftHeart.targetScale = 1.0;
+
+            if (rightGesture === 'open') rightHeart.targetScale = 1.5;
+            else if (rightGesture === 'fist') rightHeart.targetScale = 0.5;
+            else rightHeart.targetScale = 1.0;
+
+            // Firework triggers on gesture transitions
+            if (leftGesture === 'open' && prevLeftGesture !== 'open') {
+                triggerFirework(leftFw, -8.2, 0, 0, 120, '#c870ff');
+                triggerFirework(goldFw, -8.2, 0, 0, 60, '#ffe080');
+            }
+            if (rightGesture === 'open' && prevRightGesture !== 'open') {
+                triggerFirework(rightFw, 8.2, 0, 0, 120, '#4070ff');
+                triggerFirework(goldFw, 8.2, 0, 0, 60, '#ffe080');
+            }
+
+            // UI
+            if (ts - lastUI > 350) {
+                lastUI = ts;
+                statusDotLeft.className  = leftHandWorld  ? 'status-dot active' : 'status-dot';
+                statusDotRight.className = rightHandWorld ? 'status-dot active' : 'status-dot';
+                if (cameraActive && !leftHandWorld && !rightHandWorld) {
+                    statusText.textContent = 'Reach out — touch the stars';
+                    statusText.style.color = 'rgba(255,255,255,0.3)';
+                } else if (cameraActive && (leftHandWorld || rightHandWorld)) {
+                    const parts = [];
+                    if (leftHandWorld) parts.push(`Left: ${leftGesture==='open'?'PALM OPEN ✦':leftGesture==='fist'?'FIST ●':'neutral'}`);
+                    if (rightHandWorld) parts.push(`Right: ${rightGesture==='open'?'PALM OPEN ✦':rightGesture==='fist'?'FIST ●':'neutral'}`);
+                    statusText.textContent = parts.join(' | ');
+                    statusText.style.color = 'rgba(180,220,255,0.6)';
+                }
+            }
+
+            // Update
+            updateHeart(leftHeart, leftHandWorld, time, dt);
+            updateHeart(rightHeart, rightHandWorld, time, dt);
+            updateBridge(leftBridge, leftHandWorld, time, dt);
+            updateBridge(rightBridge, rightHandWorld, time, dt);
+            updateTrail(leftTrail, leftHandWorld, dt);
+            updateTrail(rightTrail, rightHandWorld, dt);
+            updateFirework(leftFw, time, dt);
+            updateFirework(rightFw, time, dt);
+            updateFirework(goldFw, time, dt);
+            updateDust(floatingDust, time);
+
+            starfield.rotation.y += dt * 0.025;
+            starfield.rotation.x += dt * 0.006;
+
+            mouseCurrent.x += (mouseTarget.x - mouseCurrent.x) * 2 * dt;
+            mouseCurrent.y += (mouseTarget.y - mouseCurrent.y) * 2 * dt;
+            camera.position.x += (mouseCurrent.x * 2.2 - camera.position.x) * 1.2 * dt;
+            camera.position.y += (0.5 + mouseCurrent.y * 1.5 - camera.position.y) * 1.2 * dt;
+            camera.lookAt(0, 0, 0);
+
+            composer.render();
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+        window.addEventListener('keydown', (e) => { if (e.key==='c'||e.key==='C') startCamera(); });
+
+        initMediaPipe();
+        requestAnimationFrame(animate);
+        console.log('%c  Ready %c💜 Open palm to enlarge & fireworks | ✊ Fist to shrink %c💙', 'font-size:14px', 'font-size:16px', 'font-size:14px');
+    </script>
+</body>
+</html>
