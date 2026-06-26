@@ -348,6 +348,14 @@
             const letters = ['L','O','V','E'];
             const letterCenters = [-5.7, -2.3, 1.4, 4.8];
 
+            // Smaller fonts for each letter — individual tight canvases
+            const fontSizes = {
+                'L': 'bold 420px "Georgia", serif',
+                'O': 'bold 390px "Georgia", serif',
+                'V': 'bold 410px "Georgia", serif',
+                'E': 'bold 380px "Georgia", serif',
+            };
+
             for (let li = 0; li < 4; li++) {
                 const letter = letters[li];
                 const cv = document.createElement('canvas');
