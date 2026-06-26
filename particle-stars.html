@@ -626,12 +626,8 @@
                 sys.revealPhase++;
                 sys.revealTimer = 0;
             }
-            // When active, target opacity always 1
             if (sys.active) sys.targetOpacity = 1.0;
-            // Only fade when no longer both-fisting AND reveal is complete
-            if (!sys.active && sys.revealPhase >= 5) {
-                sys.targetOpacity = 0;
-            }
+            else sys.targetOpacity = 0;
 
             // Phase 5: after all letters shown, start growing
             const GROW_DELAY = 0.5;
@@ -809,16 +805,7 @@
                     loveText.targetOpacity = 1.0;
                 }
             } else {
-                // Keep LOVE visible until reveal completes, then fade
-                if (loveText.revealPhase >= 5) {
-                    loveText.targetOpacity = 0;
-                    loveText.targetScale = 1.0;
-                }
-                if (!bothFists && loveText.currentOpacity < 0.02) {
-                    loveText.active = false;
-                    loveText.revealPhase = 0;
-                    loveText.revealTimer = 0;
-                }
+                loveText.active = false;
             }
 
             // UI
